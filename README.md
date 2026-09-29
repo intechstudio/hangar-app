@@ -50,6 +50,27 @@ the site is served entirely from the static asset store. This is what makes the
 deployment public. Leaving a secret unset would not make it public — it would
 make it unreachable. Anyone reinstating `main` must also set the secret.
 
+### The tslib workaround
+
+The workflow runs `npm install --no-save --no-package-lock tslib@2.8.1` between
+install and build. This is a workaround, not configuration.
+
+`@intechstudio/grid-protocol` imports `tslib` but does not declare it as a
+dependency. On macOS the build works anyway, because `tslib` arrives as an
+optional transitive dependency of `@img/sharp-wasm32` and
+`@tailwindcss/oxide-wasm32-wasi` by way of `@emnapi/runtime`. On Linux, npm
+installs the native builds of those packages instead, the wasm32 variants are
+skipped, `tslib` is never installed, and the build fails with
+`ERR_MODULE_NOT_FOUND`.
+
+**The real fix is a `@intechstudio/grid-protocol` release that declares `tslib`
+as a dependency** — it is our own package, and this will affect any Linux
+consumer of it, not just this pipeline. Once that ships, delete the step.
+
+The version matches what upstream's lockfile already pins for the optional
+entry. `--no-save --no-package-lock` leaves `package.json` and
+`package-lock.json` untouched, so the clean-tree check still means what it says.
+
 ### Response headers
 
 `_headers` in this repository is copied into the build directory on every

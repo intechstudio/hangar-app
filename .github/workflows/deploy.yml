@@ -56,6 +56,20 @@ jobs:
         working-directory: upstream
         run: npm ci
 
+      # @intechstudio/grid-protocol imports tslib but does not declare it as a
+      # dependency. It resolves on macOS only by accident: tslib arrives as an
+      # optional transitive of @img/sharp-wasm32 and @tailwindcss/oxide-wasm32-wasi
+      # via @emnapi/runtime. On Linux npm installs the native builds instead, the
+      # wasm32 packages are skipped, and the build dies with ERR_MODULE_NOT_FOUND.
+      #
+      # The real fix is a grid-protocol release declaring tslib. Until then this
+      # supplies it at the version the lockfile already pins for the optional
+      # entry. --no-save --no-package-lock keeps package.json and the lockfile
+      # untouched, so the clean-tree check below still means what it says.
+      - name: Work around grid-protocol's undeclared tslib dependency
+        working-directory: upstream
+        run: npm install --no-save --no-package-lock tslib@2.8.1
+
       - name: Build
         working-directory: upstream
         run: npm run build
