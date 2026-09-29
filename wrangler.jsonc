@@ -1,0 +1,29 @@
+{
+  // Deploy configuration for hangar.intech.studio.
+  //
+  // This is OUR config, not upstream's. sabotond-dev/hangar ships its own
+  // wrangler.jsonc whose `main` points at worker/index.js — a fail-closed Basic
+  // Auth gate from the preproduction phase. Deploying that Worker without a
+  // SITE_PASSWORD secret returns 401 for every request, so "public" is not
+  // achieved by leaving the secret unset; it is achieved by not deploying the
+  // Worker at all.
+  //
+  // Hence: no `main` and no `run_worker_first`. Nothing but the static build
+  // output is uploaded, and every request is served straight from the asset
+  // store. Upstream source is never modified by this pipeline.
+  "name": "hangar",
+  "compatibility_date": "2026-09-02",
+
+  // Relative to THIS file. The workflow checks sabotond-dev/hangar out into
+  // upstream/ and builds it there.
+  "assets": {
+    "directory": "./upstream/build",
+    "not_found_handling": "404-page",
+  },
+
+  // Cloudflare creates the DNS record and issues the certificate itself. This
+  // is refused if a CNAME already exists on the hostname.
+  "routes": [{ "pattern": "hangar.intech.studio", "custom_domain": true }],
+
+  "observability": { "enabled": true },
+}

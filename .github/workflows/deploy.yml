@@ -1,0 +1,124 @@
+# Build sabotond-dev/hangar and deploy it to hangar.intech.studio.
+#
+# Manual trigger only. See README.md for why this repository exists.
+
+name: Deploy HANGAR
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Ref of sabotond-dev/hangar to deploy (branch, tag or SHA)"
+        required: true
+        default: master
+
+# One deploy at a time. A second run waits rather than racing the first.
+concurrency:
+  group: deploy-hangar
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://hangar.intech.studio
+
+    steps:
+      - name: Check out this repository
+        uses: actions/checkout@v5
+
+      # Full history, not a shallow clone: scripts/postbuild.mjs runs
+      # `git archive HEAD` to write the GPLv3 source archive the site footer
+      # links to, and vite.config.ts reads `git rev-parse HEAD` into the page.
+      - name: Check out sabotond-dev/hangar
+        uses: actions/checkout@v5
+        with:
+          repository: sabotond-dev/hangar
+          ref: ${{ inputs.ref }}
+          path: upstream
+          fetch-depth: 0
+          persist-credentials: false
+
+      # upstream/.npmrc sets engine-strict=true and package.json requires
+      # Node >= 24, so an older runtime fails at install rather than at build.
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: upstream/.nvmrc
+          cache: npm
+          cache-dependency-path: upstream/package-lock.json
+
+      - name: Install dependencies
+        working-directory: upstream
+        run: npm ci
+
+      - name: Build
+        working-directory: upstream
+        run: npm run build
+
+      # Two checks, neither about licence compliance:
+      #
+      #  - A dirty tree makes vite.config.ts set __BUILD_DIRTY__, and
+      #    Footer.svelte prints "(built from uncommitted changes)" on the
+      #    live page.
+      #  - vite.config.ts deliberately tells the prerender crawler NOT to fail
+      #    on a 404 for /source-*.tar.gz, so a missing archive would ship a
+      #    dead footer link with a green build.
+      - name: Verify the build is deployable
+        working-directory: upstream
+        run: |
+          set -euo pipefail
+
+          dirty=$(git status --porcelain)
+          if [ -n "$dirty" ]; then
+            echo "::error::The working tree is dirty; the page would render as built from uncommitted changes."
+            echo "$dirty"
+            exit 1
+          fi
+
+          sha=$(git rev-parse HEAD)
+          archive="build/source-${sha}.tar.gz"
+          if [ ! -f "$archive" ]; then
+            echo "::error::${archive} was not written; the footer's source link would 404."
+            exit 1
+          fi
+
+          echo "HANGAR_SHA=${sha}" >> "$GITHUB_ENV"
+          echo "HANGAR_ARCHIVE=source-${sha}.tar.gz" >> "$GITHUB_ENV"
+
+      # build/ is gitignored upstream, so this lands after the clean-tree check
+      # above without dirtying anything. Cloudflare reads _headers from the
+      # assets directory and does not serve it.
+      - name: Apply response headers
+        run: |
+          set -euo pipefail
+          cp _headers upstream/build/_headers
+          echo "Rules applied:"
+          grep -vE '^\s*(#|$)' upstream/build/_headers
+
+      # Upstream pins wrangler as a devDependency, so deploy with the version
+      # the app was built against rather than whatever npx would resolve.
+      # --config is read relative to the repository root, which is where
+      # wrangler.jsonc's ./upstream/build path resolves from.
+      - name: Deploy to Cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: ./upstream/node_modules/.bin/wrangler deploy --config wrangler.jsonc
+
+      - name: Summarise
+        run: |
+          {
+            echo "### HANGAR deployed"
+            echo
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| Site | https://hangar.intech.studio |"
+            echo "| Ref requested | \`${{ inputs.ref }}\` |"
+            echo "| Commit deployed | [\`${HANGAR_SHA}\`](https://github.com/sabotond-dev/hangar/commit/${HANGAR_SHA}) |"
+            echo "| Source archive | https://hangar.intech.studio/${HANGAR_ARCHIVE} |"
+          } >> "$GITHUB_STEP_SUMMARY"
